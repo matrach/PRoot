@@ -47,7 +47,7 @@ static int remove_glue(char *path)
 {
 	char *command;
 
-	command = talloc_asprintf(NULL, "find %s -empty -delete 2>/dev/null", path);
+	command = talloc_asprintf(NULL, "find '%s' -delete 2>/dev/null", path);
 	if (command != NULL) {
 		int status;
 
@@ -122,28 +122,34 @@ mode_t build_glue(Tracee *tracee, const char *guest_path, char host_path[PATH_MA
 	else
 		type = S_IFDIR;
 
-	/* Try to create this component into the "guest" or "glue"
-	 * rootfs (depending if there were a glue previously).  */
-	if (S_ISDIR(type))
-		status = mkdir(host_path, 0777);
-	else
-		status = mknod(host_path, 0777 | type, 0);
-
-	/* Nothing else to do if the path already exists or if it is
-	 * the final component since it will be pointed to by the
-	 * binding being initialized (from the example,
-	 * "$GUEST/black/holes/and/revelations" -> "$HOST/opt").  */
-	if (status >= 0 || errno == EEXIST || is_final)
-		return type;
-
-	/* mkdir/mknod are supposed to always succeed in
-	 * tracee->glue.  */
+	/* Attempt to create new paths only in gluefs. */
 	comparison = compare_paths(tracee->glue, host_path);
 	if (   comparison == PATHS_ARE_EQUAL
 	    || comparison == PATH1_IS_PREFIX) {
-		notice(tracee, WARNING, SYSTEM, "mkdir/mknod");
-		return 0;
+
+		notice(tracee, INFO, INTERNAL, "creating a glue bind for %s -> %s",
+			host_path, guest_path);
+		/* Try to create this component into the "glue" rootfs. */
+		if (S_ISDIR(type))
+			status = mkdir(host_path, 0700);
+		else
+			status = mknod(host_path, 0700 | type, 0);
+
+		/* mkdir/mknod are supposed to always succeed in
+		 * tracee->glue.  */
+		if (status < 0 && errno != EEXIST) {
+			notice(tracee, WARNING, SYSTEM, "mkdir/mknod");
+			return 0;
+		} else
+			return type;
 	}
+
+	/* Nothing else to do if the path already exist or it is
+	 * the final component it will be pointed to by the
+	 * binding being initialized (from the example,
+	 * "$GUEST/black/holes/and/revelations" -> "$HOST/opt").  */
+	if (is_final || access(host_path, F_OK) != -1)
+		return type;
 
 	/* From the example, create the binding "/black" ->
 	 * "$GLUE/black".  */
